@@ -1,2 +1,2 @@
 # Nashville-Home-Price-Predictions
-Attempting to predict home sale prices in Nashville Tennessee
+Joint projectCollaboration effort attempting to predict home sale prices in Nashville Tennessee
