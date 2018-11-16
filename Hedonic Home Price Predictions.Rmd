@@ -1,0 +1,478 @@
+---
+title: "HEDONIC HOME PRICE PREDICTION"
+author: "Anthony Ayebiahwe & Steven Chang"
+date: "November 6, 2018"
+output:
+html_document: default
+pdf_document: default
+---
+  <ol>
+  <li>INTRODUCTION</li>
+  <li>DATA GATHERING AND EXPLORATORY ANALYSIS</li>
+  <li>METHODS</li>
+  <li>MODELING-IN-SAMPLE Prediction</li>
+  <li>RESULTS</li>
+  <li>DISCUSSION</li>
+  <li>CONCLUSION</li>
+  </ol>
+  
+<center> <h3> INTRODUCTION </h3> </center>
+In this project, we seek to utilize local intelligence to build a predictive model of home prices in Nashville Tennessee. We aim to use our model to complement or even improve the existing model that Zillow currently has, since its current market predictions are not as accurate as can be. To do this, we gathered data from Nashville's Open Data Portal https://data.nashville.gov/. This project will help us gain a  better understanding on the housing market conditions in Nashville.
+
+In this particular project, we are confined to OLS regression, making it a challenge to create a model that generates accurate predictions. Moreover, the data required very extensive cleaning and preparing before use. To improve the accuracy of our model, we will utilize feature engineering techniques to craft unique variables that can influence housing prices. For example, we believe that a house in good physical condition is likely to cost more than a house that is more run-down. In this case, we will create a dummy variable for the physical condition of the house, where a value of 0 will represent houses in poor condition and a value of 1 will represent houses in a good condition. Other factors we used include the structure of the frame of the house, the residential type of the house, and the year the house was built. We will then incoprate all the dummy variables into our regression model and find out if each factor truly had an effect on home prices. 
+
+From this project, we found that the year in which a house was built is significantly affects housing prices in Nashville. Newer houses tend to cost more than older houses. We also found that houses in good conditions cost more than houses in bad condtions. Moreover, we found that residential condos tend to cost less than single family houses. Finally, internal amenities such as the number of bedrooms, number of bathrooms, and whether or not a house has a basement do not significantly affect housing prices.
+
+<center> <h3> DATA GATHERING AND EXPLORATORY ANALYSIS </h3> </center>
+  
+We gathered data from Nashville's Open Data Portal: https://data.nashville.gov/, containing 20000 home prices and 57 variables related to each home in the Nashville area. In the data-cleaning process, we removed a few homes that are not located within Nashville itself, and removed all NA values in the dataset. We also filtered for sales prices that are not 0. Finally, we pulled the Nashville basemap and zipcode shapefiles from Nashville's Open Data Portal to map home sale prices and mean absolute error for our predictions.
+
+The summary statistics of our variables, correlation matrix, map of home sale prices across Nashville, and 3 maps of our most interesting independent variables are included below.
+```{r, include=FALSE}
+setwd("~/Library/Mobile Documents/com~apple~CloudDocs/School/UPenn/MUSA 507/Midterm Project/midtermData_forStudents")
+
+library(stargazer)
+library(corrplot)
+library(caret) 
+library(AppliedPredictiveModeling)
+library(stargazer)
+library(tidyverse)
+library(sf)
+library(tigris)
+library(ggplot2)
+library(sf)
+options(scipen=999)
+library(tidyr)
+library(knitr)
+library(reshape2)
+library(lubridate)
+library(dplyr)
+library(spdep)
+library(leaflet)
+library(viridis)
+library(spdep)
+library(viridis)
+```
+
+```{r, include=FALSE}
+#Load Data and name 
+dataset<-read_csv("/Users/irondisciple/Library/Mobile Documents/com~apple~CloudDocs/School/UPenn/MUSA 507/Midterm Project/midtermData_forStudents/train.and.test_student.csv")
+Nashville<-subset(dataset,dataset$LocationCity=="NASHVILLE")
+```
+
+```{r, echo=FALSE, fig.height=6, fig.width=6}
+# Correlation Matrix
+Nash<- select(Nashville,-OwnerInstrument, -OwnerName, -OwnerAddress1, -OwnerAddress2,
+              -OwnerCity, -OwnerState, -OwnerZip, -OwnerCountry, -LocationAddress, -LocationCity,
+              -TaxDistrict, -ParcelId_property, -District, -LandUseDescription, 
+              -LandUseFullDescription, -Building_Type, -Story_Height, -Exterior_Wall, 
+              -Grade, -Frame, -avgHtfl_building, -Phys_Depreciation, -Land_Unit_Type,
+              -HeatingType, -Fixtures, -Foundation,
+              -notheated,-CouncilDistrict,-CensusBlock,-Card,-sf_ifla,-fpla,-test,-kenID)
+
+
+M <- cor(Nash)
+corrplot(M, method = "number",tl.cex=0.6)
+```
+
+This shows the correlation matrix among the variables.
+
+```{r, include=FALSE}
+Nashville$OwnerAddress2<-NULL
+Nashville$notheated<-NULL
+Nashville$HeatingType<-NULL
+
+Nashville<- 
+  Nashville%>%
+  filter(Building_Type== "SINGLE FAMILY" |Building_Type == "RESIDENTIAL CONDO")%>%
+  mutate(isSingleFamily =as.factor(ifelse(Building_Type== "SINGLE FAMILY" ,1,0)))
+
+
+# Feature Engineering Yearly Built, Number of Basement, number of Bedrooms and Units in Building
+Nashville<- 
+  Nashville%>% 
+  mutate(YR_BUILT = as.factor(yearbuilt_building),
+         NUM_BEDROOMS = as.factor(bedroomsunits_building),
+         NUMBER_BATHS=as.factor(baths),
+         NUMBER_OFROOMS = as.factor(roomsunits_building)) %>%
+  as.data.frame()
+
+# Making Dummy Variables for Houses that are physically depreciated 
+Nashville<- 
+  Nashville%>%
+  filter(Phys_Depreciation== "Average" |Phys_Depreciation == "Good")%>%
+  mutate(isVeryGood = as.factor(ifelse(Phys_Depreciation== "Average" ,1,0)))
+
+# Taking Care of Nas
+Nashville<-Nashville[,-56]
+
+check<-which(!complete.cases(Nashville))
+check
+
+Nashville_NoNA<-Nashville[-check,]
+```
+
+<center> <h5>Summary Statistics of All Variables </h5> </center>
+```{r, echo=FALSE}
+# Summary Statistics and getting the class
+stargazer(Nashville_NoNA, type="text", title = "Summary Statistics of All Variables")
+```
+
+
+<center> <h5>Summary Statistics of Variables with Internal Charateristics </h5> </center>
+```{r, echo=FALSE}
+
+# Summary Statistics of Internal Characteristics
+Internal_Characteristics<-Nashville_NoNA[c(31,32,33,35:42,47:49,56,57,58)]
+stargazer(Internal_Characteristics, type="text", title = "Summary Statistics of Variables with Internal Characteristics")
+
+```
+
+<center> <h5>Summary Statitics of Variables with Amenities/Public Services</h5> </center>
+```{r, echo=FALSE}
+Amenities<-Nashville_NoNA[c(25,26,27,28,42,49)]
+stargazer(Amenities,type="text",title = "Summary Statistics of Variables with Amenities")
+```
+
+<center> <h5>Summary Statistics of Variables with Spatial Structure</h5> </center>
+```{r, echo=FALSE}
+Spatial<-Nashville_NoNA[c(17,4:23,29,30,44:46,50:51,53)]
+stargazer(Spatial, type="text", title = "Summary Statistics of Variables with Spatial Structure")
+```
+
+```{r, include=FALSE}
+#Getting Basemap of Nashville and Mapping SalesPrice of Houses
+baseMap <-read_sf("https://data.nashville.gov/api/geospatial/xxxs-vvs4?method=export&format=GeoJSON")
+# Dissolving Basemap
+ggplot() +
+  geom_sf(data=st_union(baseMap)) +
+  labs(title="Nashville basemap")
+```
+
+
+```{r, echo=FALSE}
+# Mapping SalesPrice in Nashville
+ggplot() + 
+  geom_sf(data=st_union(baseMap,crs=4326)) +
+  geom_point(data=Nashville, aes(x = WGS1984X, y = WGS1984Y, colour=factor(ntile(Nashville$SalePrice,5))), 
+             size = 1) + 
+  scale_colour_manual(values = c("#ffffcc","#a1dab4","#41b6c4","#2c7fb8","#253494"),
+                      labels=as.character(quantile(Nashville$SalePrice,
+                                                   c(.1,.2,.4,.6,.8),na.rm=T)),
+                      name="Housing Sales Prices\n(Quintile\nBreaks)") +
+  labs(title="Housing Sales Prices, Nashville")
+```
+
+
+
+Home sale prices in Nashville range from about 2000 dollars to about 700,000 dollars, with a mean of about 290,000 dollars.
+
+```{r, echo=FALSE}
+# Mapping Square feet of Finished Area in Nashville
+ggplot() + 
+  geom_sf(data=st_union(baseMap,crs=4326)) +
+  geom_point(data=Nashville, aes(x = WGS1984X, y = WGS1984Y, colour=factor(ntile(Nashville$sf_finished,5))), 
+             size = 1) + 
+  scale_colour_manual(values = c("#ffffcc","#a1dab4","#41b6c4","#2c7fb8","#253494"),
+                      labels=as.character(quantile(Nashville$sf_finished,
+                                                   c(.1,.2,.4,.6,.8),na.rm=T)),
+                      name="Square Feet of Finished Area\n(Quintile\nBreaks)") +
+  labs(title="Square Feet of Finished Area, Nashville")
+```
+
+
+The map above shows the square feet of finished area inside houses across Nashville.
+
+
+```{r, echo=FALSE}
+# Mapping Neigborhood Accessor
+ggplot() + 
+  geom_sf(data=st_union(baseMap,crs=4326)) +
+  geom_point(data=Nashville, aes(x = WGS1984X, y = WGS1984Y, colour=factor(ntile(Nashville$NeighborhoodAssessor,5))), 
+             size = 1) + 
+  scale_colour_manual(values = c("#ffffcc","#a1dab4","#41b6c4","#2c7fb8","#253494"),
+                      labels=as.character(quantile(Nashville$NeighborhoodAssessor,
+                                                   c(.1,.2,.4,.6,.8),na.rm=T)),
+                      name="Neighborhood Accessor\n(Quintile\nBreaks)") +
+  labs(title="Neighborhood Accessor, Nashville")
+
+```
+
+
+The map above shows the neighborhood accessor across Nashville.
+
+
+
+```{r, echo=FALSE}
+ggplot() + 
+  geom_sf(data=st_union(baseMap,crs=4326)) +
+  geom_point(data=Nashville, aes(x = WGS1984X, y = WGS1984Y, colour=factor(ntile(Nashville$sf_finished_less_ifla,5))), 
+             size = 1) + 
+  scale_colour_manual(values = c("#ffffcc","#a1dab4","#41b6c4","#2c7fb8","#253494"),
+                      labels=as.character(quantile(Nashville$sf_finished_less_ifla,
+                                                   c(.1,.2,.4,.6,.8),na.rm=T)),
+                      name="Total Finished area less an adjustment\n(Quintile\nBreaks)") +
+  labs(title="Total Finished area less an adjustment, Nashville")
+```
+
+This map shows the total finished area of a building unit across Nashville.
+
+```{r, echo=FALSE}
+p <- ggplot(Nashville, aes(NUM_BEDROOMS, fill =isSingleFamily))
+p + geom_bar()+ ggtitle("NUMBER OF BEDROOMS IN SINGLE FAMILY VS RESIDENTIAL CONDO")+xlab("NUMBER OF BEDROOMS")
+```
+
+A map representing the number of bedroom in Single and residential condo houses in Nashville. 0 represent residential condos and 1 represents single family homes.
+
+
+
+<center> <h3> METHODS </h3> </center>
+  
+In order to mine the data for the most powerful correlations, we used feature-engeering techniques to craft unique features or variables from our data. We hypothesized that there is a qualitative difference in sales price between buildings which are constructed from bricks and those with wooden frames. We also hypothesized that there is a qualitative difference in sales price between buildings which are built more recently (2018) than those that are built a couple years ago. Moreover, we also hypothesized that there is a qualitative difference in sales price between single family homes and residential condos. Finally, we hypothesized that house sales prices are likely to be different based on the number of bathrooms and  bedrooms in the house. We started by subsetting variable observations and created a dummy variable that equals 1 for the variables we are using as a base and 0 otherwise. For example, we used a value of 1 for single family homes and a value of 0 for residential condos.
+
+
+<center> <h5>Modeling - In Sample(Training Set) and Prediction Results</h5> </center>
+Here we built a model with all the data including the dummy variables we created earlier using Nashville data to get regression coefficients. After this, we performed in-sample and out-of-sample predictions by training our data using the sales price that are available to us (test=0), and then randomly split the data to contain 75% of all observations. We also had a test data set (test=1) of unseen house price data. Finally, we predicted for the unseen housing prices using the training set. The results for this procedure are shown below:
+  
+  
+  ```{r, include=FALSE}
+
+# SalesValues, creating Training and Testing Set
+
+SalesValues<-Nashville_NoNA%>%
+  as.data.frame()%>%
+  filter(test==0)
+
+
+inTrain <- createDataPartition(
+  y = SalesValues$SalePrice, 
+  p = .75, list = FALSE)
+
+training <- SalesValues[inTrain,]
+test<-subset(Nashville,Nashville$test==1)
+
+# Building Regression using the Training as Data
+
+reg<-lm(SalePrice~kenID+LocationZip+CouncilDistrict+CensusBlock+accountnumber_property+
+          yearbuilt_building+
+          NeighborhoodAssessor+
+          sf_fin_less_ifla_less_bfin+sf_sketched+Zone_Assessor+baths+WGS1984X+WGS1984Y+NUMBER_BATHS+effyearbuilt_building+NUM_BEDROOMS+isSingleFamily,data = training)
+summary(reg)
+```
+
+
+```{r, echo=FALSE}
+# Table of Regression Result using the Training Data
+stargazer(reg, type = 'text',title="Summary Statistics of Training Set")
+
+```
+
+```{r, include=FALSE}
+# Predicting for the Observed, since the Observed is 0 and can't be predicted,Inf will be the abs error
+regPred <- predict(reg,test) 
+regPred
+
+regPred <- 
+  data.frame(observedSales = test$SalePrice,
+             predictedSales = regPred)
+regPred <-
+  regPred %>%
+  mutate(error = predictedSales - observedSales) %>%
+  mutate(absError = abs(predictedSales - observedSales)) %>%
+  mutate(percentAbsError = abs(predictedSales - observedSales) / observedSales) 
+
+
+head(regPred)
+
+```
+
+```{r, echo=FALSE}
+head(regPred)
+```
+
+```{r}
+mean(regPred$absError)
+```
+
+<center> <h5>Cross Validation</h5> </center>
+  ```{r, include=FALSE}
+
+set.seed(825)
+fitControl<-trainControl(method = "cv",number = 100)
+
+lmFit <- train(SalePrice ~LocationZip+CouncilDistrict+CensusBlock+accountnumber_property+
+                 yearbuilt_building+
+                 NeighborhoodAssessor+
+                 sf_fin_less_ifla_less_bfin+sf_sketched+Zone_Assessor+baths+WGS1984X+WGS1984Y+NUMBER_BATHS+isVeryGood, data = Nashville_NoNA, 
+               method = "lm", trControl = fitControl)
+```
+
+```{r, echo=FALSE}
+stargazer(lmFit, type = 'text',title="Summary Statistics of lmFit")
+lmFit
+
+stargazer(lmFit$resample, type="text",title = "Summary Statistics of lmFit")
+
+# Checking to see if the model is Generazable.If our model is generalizable, we should expect relatively comparable goodness of fit metrics across each subset
+
+sd(lmFit$resample[,3])
+```
+
+###HISTOGRAM OF THE CROSS-VALIDATION
+```{r, echo=FALSE}
+# One of the folds had a MAE that was much different the others. Looks like 10 is enough fold but maybe it's not enough to make decisions. 
+
+ggplot(as.data.frame(lmFit$resample), aes(MAE)) + 
+  geom_histogram(bins=20) +
+  labs(x="Mean Absolute Error",
+       y="Count")
+```
+
+Two of the folds had a MAE that was much different the others. Looks like 5 folds are sufficient in this case. It also seems like much of the mean error is concentrated around 120k. There may be an overfit in the model.
+
+
+#### PLOT OF PREDICTED PRICES AS A FUNCTION OF OBSERVED PRICES
+```{r, echo=FALSE}
+library(ggplot2)
+regDF <- cbind(Nashville$SalePrice, reg$fitted.values)
+colnames(regDF) <- c("Observed", "Predicted")
+regDF <- as.data.frame(regDF)
+ggplot() + 
+  geom_point(data=regDF, aes(Observed, Predicted)) +
+  stat_smooth(data=regDF, aes(Observed, Observed), method = "lm", se = FALSE, size = 1, colour="red") + 
+  stat_smooth(data=regDF, aes(Observed, Predicted), method = "lm", se = FALSE, size = 1, colour="blue") + 
+  labs(title="Predicted Sales Volume as a function\nof Observed Sales Volume",
+       subtitle="Perfect prediction in red; Actual prediction in blue") +
+  theme(plot.title = element_text(size = 18,colour = "black"))
+
+```
+
+```{r, include=FALSE}
+regA<-lm(SalePrice~kenID+LocationZip+CouncilDistrict+CensusBlock+accountnumber_property+
+           yearbuilt_building+
+           NeighborhoodAssessor+
+           sf_fin_less_ifla_less_bfin+sf_sketched+Zone_Assessor+baths+WGS1984X+WGS1984Y+NUMBER_BATHS+effyearbuilt_building+NUM_BEDROOMS+isSingleFamily,data = Nashville_NoNA)
+```
+
+
+#### Moran's I and Residuals Mapping for the test set
+```{r, echo=FALSE}
+regA_residuals <- data.frame(regA$residuals)
+hedLonLat <- data.frame(Nashville_NoNA$WGS1984X,Nashville_NoNA$WGS1984Y)
+residualsToMap <- cbind(hedLonLat, regA_residuals )
+colnames(residualsToMap) <- c("longitude", "latitude", "residual")
+
+ggplot() + 
+  geom_sf(data=st_transform(baseMap,crs=4326)) +
+  geom_point(data = residualsToMap, 
+             aes(x=longitude, y=latitude, color=residual), 
+             size = .1) + 
+  labs(title="Regression residuals") +
+  scale_color_viridis()
+
+```
+MEAN ABSOLUTE ERROR(MAE) by ZIP CODE
+```{r, echo=FALSE}
+Zipcode<-read_sf("https://data.nashville.gov/api/geospatial/u7r5-bpku?method=export&format=GeoJSON")
+reg_Predicted <- data.frame(mean(regPred$absError))
+hedLonLat <- data.frame(Nashville$WGS1984X,Nashville$WGS1984Y)
+PredictToMap <- cbind(hedLonLat,reg_Predicted)
+colnames(PredictToMap) <- c("longitude", "latitude", "MAE")
+
+
+# Map of Residuals for Test Set
+ggplot() + 
+  geom_sf(data=st_transform(Zipcode,crs=4326)) +
+  geom_point(data =hedLonLat, 
+            aes(x=Nashville$WGS1984X, y=Nashville$WGS1984Y, color=mean(regPred$absError)), 
+            size = .1) + 
+  labs(title="Regression Mean Absolute Error") +
+  scale_color_viridis()
+
+```
+
+Since the original sales prices of the test was unavailable, we were only able to calculate the mean absolute error of our prediction. We didn't have any available data to compare our predictions to in order to calculate the mean absolute percentage error of our prediction. From above, we witnessed a mean absolute error of about 360,000 dollars.
+
+
+```{r, echo=FALSE}
+# Mean Price per Zipcode
+
+Zipcode<-read_sf("https://data.nashville.gov/api/geospatial/u7r5-bpku?method=export&format=GeoJSON")
+reg_Predicted <- data.frame(mean(Nashville$SalePrice))
+hedLonLat <- data.frame(Nashville$WGS1984X,Nashville$WGS1984Y)
+PredictToMap <- cbind(hedLonLat,reg_Predicted)
+colnames(PredictToMap) <- c("longitude", "latitude", "Mean Price per Zipcode")
+
+
+# Map of Mean Price Per Zipcode
+ggplot() + 
+  geom_sf(data=st_transform(Zipcode,crs=4326)) +
+  geom_point(data =hedLonLat, 
+            aes(x=Nashville$WGS1984X, y=Nashville$WGS1984Y, color=mean(Nashville$SalePrice)), 
+            size = .1) + 
+  labs(title="Mean Price per Zip Code") +
+  scale_color_viridis()
+```
+This map shows the mean home sale prices by ZIP code. The average sales price for houses across all ZIP codes are about 308,000 dollars.
+
+<center> <h3> DISCUSSION </h3> </center>
+One of our most interesting variables was the year in which the house was built. This variable seeks to shows whether the age of a house can have significant effects on its value. Other variables we used include the construction type of the house, the number of bathrooms in the house, the number of bedrooms in the house, and the square footage of finished area of the house. We hypothesized that the construction type of a house (Brick or Frame) can affect the price of the house. Also, the number of bedrooms and bathrooms a house has can also affect its value. For example, a 3 bedroom house is more likely to cost more than a one bedroom house. Furtheremore, a house with more bathroom and a larger furnished area is more likely to cost more than an unfurnished house with fewer bathrooms or bedrooms. Overall, we conclude that our regression model is not very effective at making housing price predictions. There are more robust models that can capture more details in the dataset or offer improved abilities to handle spatial data than OLS. From our maps, higher housing prices are concentrated in the Northeast part of Nashville and the lowest housing prices are scattered throughout Nashville.
+Our prediction for housing prices in Nashville was off by 360,000 dollars. The model predicted particularly well in the Northeast part of Nashville.
+
+
+<center> <h3> CONCLUSION </h3> </center>
+We would not recommend our model to Zillow. Despite efforts to increase its generalizability, it is still lacking. Moreover, there are more robust models available that can possibly be used to provide better predictions that are restricted by criteria for this project. In the future, we will continue to improve the accuracy and generalizability of our model.
+
+
+<center> <h3> DATA DICTIONARY </h3> </center>
+Fields in the Multiple Record and Single Record per Parcel Data
+
+<ol>
+<li>kenID - and ID I created.</li>
+<li>ParcelId_property	The Parcel ID; the parcel identificiation string.  The ParcelID format is described in the table at the end of this document.</li>
+<li>UserAccount	The same as ParcelId_Property without spaces and punctuation.  This field can be used to join to the UserAccount field in the NameAddressLegal data. (Separate data that can be downloaded from the Assessor's FTP site.) It can also be used to join to the SubAreas and YardItems tables.</li>
+<li>accountnumber_property	Internal identification used in the Assessor's office.</li>
+<li>Card	The sequence number of a building or the number of buildings on a parcel. See the Multiple Records per Parcel and Single Records per Parcel topics earlier in this document for an explanation of how the multiple and single record data works.</li>
+<li>District	Identifies which tax Levy area the parcel is in.  For example General services district (GSD) or Urban services district (USD).  It may be a satellite city like Goodlettsville or Belle Meade, etc.</li>
+<li>LandUseDescription	General land use.</li>
+<li>LandUseFullDescription	Land use.</li>
+<li>NeighborhoodAssessor	The neighborhood code (NBC) is used by the Assessor's office to group similar properties for the purpose of determining property value.  It is not associated with common subdivisions or neighborhoods.</li>
+<li>Acrage	Acres of land.</li>
+<li>Land_Appraisal	Value of the land.</li>
+<li>Improvements_Appraisal	Value of the improvements like buildings and yard items.</li>
+<li>Total_Appraisal	Total value of land and improvements.</li>
+<li>Land_Assessment	Assessed value of the land.</li>
+<li>Improvements_Assessment	Assessed value of improvements like buildings and yard items.</li>
+<li>Total_Assessment	Total assessed value of land and improvements.</li>
+<li>Building_Type	Type of building. </li>
+<li>Story_Height	Number of stories of the building. </li>
+<li>Exterior_Wall	Exterior wall type.</li>  
+<li>Grade	Rating of building grade. </li>
+<li>Frame	Building frame type. </li> 
+<li>yearbuilt_building	Actual year the building was built.</li> 
+<li>avgHtfl_building	Average ceiling height in feet for commercial property.</li> 
+<li>roomsunits_building	Number of rooms in the building.</li>
+<li>bedroomsunits_building	Number of bedrooms.</li>
+<li>units_building	If multi family like a duplex, the number of units.</li>
+<li>sf_finished	Square feet of finished area.</li>
+<li>sf_ifla	The adjustment amount to Finished area.  (When the finish area produced by the computer sketch routine is not precise enough, an adjustment is made.  It is implied that it is a negative number.)</li>
+<li>sf_bsmt	Square feet of the basement if any.</li>
+<li>sf_bsmt_fin	Square feet of the basement that is finished.</li>
+<li>sf_finished_less_ifla	Total Finished area less an adjustment, see sf_ifla.</li>  
+<li>sf_fin_less_ifla_less_bfin	The effective finished area with any basement finish removed.</li>
+<li>sf_sketched	The gross footage not including the adjustment amount.</li>
+<li>ac_sfyi	Central air.  0 = no central air ; 1 = central air (Residential)</li>
+<li>Phys_Depreciation	Building condition</li>
+<li>NumofUnits_land	Units used for appraisal, may be sq footage or acres or front footage or rental units or sites or others.  See the Land_Unit_Type field.</li>
+<li>Zone_Assessor	Zones (jurisdictions) These are 9 large areas of the county used by the appraisal staff to coordinate appraisal teams. </li> 
+<li>Land_Unit_Type	Type of units associated with NumofUnits_land. </li>  
+<li>baths	Number of baths</li>  
+<li>halfbaths	Number of halfbaths</li>
+<li>HeatingType	Method of heating.</li>  
+<li>Fixtures	Estimated plumbing fixtures</li> 
+<li>Foundation	Type of foundation. </li>  
+<li>notheated	This field is no longer supported.</li>
+<li>fpla	This field is no longer supported.  Instead you can find fireplaces by looking at the YardItems data.</li>
+<li>test - the dataset that I will test you on.</li>
+
+</ol>
